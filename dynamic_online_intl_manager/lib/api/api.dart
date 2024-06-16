@@ -4,16 +4,25 @@ import 'package:dynamic_online_intl_manager/model/base_response.dart';
 import 'package:dynamic_online_intl_manager/api/url_constants.dart';
 import 'package:dio/dio.dart';
 
-class Api {
+mixin Api {
+  static Api? _instance;
+  static Api get instance {
+    _instance ??= CommonApi();
+    return _instance!;
+  }
+
   Dio? _dio;
   Dio get dio {
-    if (_dio == null) {
-      _dio = Dio();
-      _dio!.options.baseUrl = UrlConstants.baseURL;
-      _dio!.options.connectTimeout = const Duration(seconds: 10);
-      _dio!.options.receiveTimeout = const Duration(seconds: 20);
-      _dio!.interceptors.addAll(_interceptors());
-    }
+    _dio ??= initDio();
+    return _dio!;
+  }
+
+  Dio initDio() {
+    _dio = Dio();
+    _dio!.options.baseUrl = UrlConstants.baseURL;
+    _dio!.options.connectTimeout = const Duration(seconds: 10);
+    _dio!.options.receiveTimeout = const Duration(seconds: 20);
+    _dio!.interceptors.addAll(_interceptors());
     return _dio!;
   }
 
@@ -34,7 +43,9 @@ class Api {
   }
 }
 
-extension IntlApi on Api {
+class CommonApi with Api {}
+
+extension IntlInterface on Api {
   Future<List<String>> getLanguages() async {
     final Response response = await dio.get('/l10ns');
     if (response.statusCode != 200) {
@@ -54,13 +65,25 @@ extension IntlApi on Api {
   }
 
   Future<CommonResponse> updateTranslation(String fileName, String key, String value) async {
-    final Response response = await dio.post('/l10ns/update', data: {
-      'fileName': fileName,
-      'key': key,
-      'value': value,
-    });
+    final Response response = await dio.post(
+      '/l10ns/update',
+      options: Options(receiveTimeout: const Duration(seconds: 2)),
+      data: {
+        'fileName': fileName,
+        'key': key,
+        'value': value,
+      },
+    );
     if (response.statusCode != 200) {
       throw Exception('Failed to update translation');
+    }
+    return CommonResponse.fromJson(response.data);
+  }
+
+  Future<CommonResponse> syncGitFile() async {
+    final Response response = await dio.post('/l10ns/sync');
+    if (response.statusCode != 200) {
+      throw Exception('Failed to sync git file');
     }
     return CommonResponse.fromJson(response.data);
   }

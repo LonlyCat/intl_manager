@@ -14,7 +14,6 @@ void main(List<String> arguments) {
   }
   if (root.isEmpty) {
     root = Directory.current.path;
-    return;
   }
   dynamic_online_intl_serve.startServer(root);
 }

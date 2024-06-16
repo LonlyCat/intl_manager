@@ -93,7 +93,14 @@ Future<Response> _getRawLanguageFile(Request request, String fileName) async {
 /// 更新翻译
 /// POST 请求，请求体为 JSON 格式
 /// 参数： {fileName, key, value}
-Future<Response> _updateTranslation(Request request) async {
+Future<Response> _updateTranslation(Request request) {
+  Future<Response> response = _internalUpdateTranslation(request);
+  _translationQueue.add(response);
+  _invokeUpdateTranslation();
+  return response;
+}
+
+Future<Response> _internalUpdateTranslation(Request request) async {
   if (request.method != 'POST') {
     return Response.forbidden('Method Not Allowed');
   }
@@ -122,7 +129,7 @@ Future<Response> _updateTranslation(Request request) async {
         ),
       ]);
       if (suc) {
-        _pushChangeToGit();
+        await _pushChangeToGit();
         final responseData = _successResponse(null);
         return Response.ok(jsonEncode(responseData),
             headers: {'Content-Type': 'application/json'});
@@ -141,6 +148,35 @@ Future<Response> _updateTranslation(Request request) async {
     }
   } catch (e) {
     final responseData = _errorResponse(code: -1, msg: 'Failed to update file: ${e.toString()}');
+    return Response.ok(jsonEncode(responseData),
+        headers: {'Content-Type': 'application/json'});
+  }
+}
+
+Future<Response>? _currentTranslation;
+List<Future<Response>> _translationQueue = [];
+Future _invokeUpdateTranslation() async {
+  if (_currentTranslation != null) {
+    return;
+  }
+  if (_translationQueue.isEmpty) {
+    return;
+  }
+  _currentTranslation = _translationQueue.removeAt(0);
+  await _currentTranslation;
+  _currentTranslation = null;
+  _invokeUpdateTranslation();
+}
+
+/// 同步翻译
+Future<Response> _syncTranslations(Request request) async {
+  bool suc = await _pushChangeToGit();
+  if (suc) {
+    final responseData = _successResponse(null);
+    return Response.ok(jsonEncode(responseData),
+        headers: {'Content-Type': 'application/json'});
+  } else {
+    final responseData = _errorResponse(code: -10, msg: 'Failed to sync translations');
     return Response.ok(jsonEncode(responseData),
         headers: {'Content-Type': 'application/json'});
   }
@@ -243,33 +279,27 @@ Future<ServeConfig> _loadServeConfig() async {
 // 向 git 仓库提交并推送修改
 Future<bool> _pushChangeToGit() async {
   final config = await _loadServeConfig();
-  final msg = '[MDF] Update ${DateTime.now().toString()}';
+  // 执行 lib/script/git_sync.sh 脚本, 并将 branch、 projectDir 传递给脚本
+  // 并将脚本执行结果输出到控制台
   return _runCommands([
     Process.run(
-      'git',
-      ['add', '.'],
-      workingDirectory: config.projectDir,
-    ),
-    Process.run(
-      'git',
-      ['commit', '-m', 'Update $msg'],
-      workingDirectory: config.projectDir,
-    ),
-    Process.run(
-      'git',
-      ['push', 'origin', config.branch],
-      workingDirectory: config.projectDir,
+      'sh',
+      ['-c', 'lib/script/git_sync.sh ${config.branch} ${config.projectDir}'],
+      workingDirectory: _rootPath,
     ),
   ]);
 }
 
 Future<bool> _runCommands(List<Future<ProcessResult>> commands) async {
   for (var command in commands) {
-    final result = await command;
+    // 等待 2 秒, 避免过快导致 git 仓库文件锁导致的异常
+    await Future.delayed(Duration(seconds: 2));
+    ProcessResult result = await command;
     if (result.exitCode != 0) {
-      print('Failed to run command: ${result.stderr}');
+      print('Failed to run command with code ${result.exitCode}: ${result.stderr}');
       return false;
     }
+    print('Command: ${result.stderr.isNotEmpty ? result.stderr : result.stdout}');
   }
   return true;
 }
@@ -277,15 +307,6 @@ Future<bool> _runCommands(List<Future<ProcessResult>> commands) async {
 void startServer(String rootPath) async {
   _rootPath = rootPath;
   _loadServeConfig();
-  // 创建 CORS 处理程序
-  final corsH = corsHeaders(headers: {
-    // 允许来自 Flutter Web 应用的域名
-    'Access-Control-Allow-Origin': '*',
-    // 允许的 HTTP 方法
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    // 允许的请求头
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  });
 
   // 定义路由
   final router = Router()
@@ -293,17 +314,31 @@ void startServer(String rootPath) async {
     ..get('/l10ns/<fileName>', _getLanguageFile)
     ..get('/l10ns/raw/<fileName>', _getRawLanguageFile)
     ..post('/l10ns/update', _updateTranslation)
+    ..post('/l10ns/sync', _syncTranslations)
     ..post('/l10ns/add', _addTranslations);
+
+  // 创建 CORS 处理程序
+  final corsH = corsHeaders(headers: {
+    // 允许来自 Flutter Web 应用的域名
+    ACCESS_CONTROL_ALLOW_ORIGIN: '*',
+    // 允许的 HTTP 方法
+    ACCESS_CONTROL_ALLOW_METHODS: 'GET, POST, PUT, DELETE, OPTIONS',
+    // 允许的请求头
+    ACCESS_CONTROL_ALLOW_HEADERS: 'Content-Type, Authorization',
+  });
 
   // 使用 CORS 处理程序
   final handler = const Pipeline()
       .addMiddleware(logRequests())
       .addMiddleware(corsH)
-      .addHandler(router);
+      .addHandler(router.call);
 
   // 启动服务器
-  final server = await io.serve(handler, 'localhost', 8080);
-  print('Serving at http://${server.address.host}:${server.port}');
+  try {
+    await io.serve(handler, 'localhost', 8080);
+  } catch (e) {
+    print('run server with err: $e');
+  }
 }
 
 Map _successResponse(

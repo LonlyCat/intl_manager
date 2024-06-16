@@ -43,9 +43,8 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _loadData() async {
-    Api api = Api();
     try {
-      _languages = await api.getLanguages();
+      _languages = await Api.instance.getLanguages();
       if (_languages.isNotEmpty) {
         String lan = _languages.first;
         await _loadLanguage(lan);
@@ -57,9 +56,8 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _loadLanguage(String language) async {
-    Api api = Api();
     try {
-      _translations = await api.getLanguageFile(language);
+      _translations = await Api.instance.getLanguageFile(language);
       if (!mounted) return;
       setState(() {
         _currentLanguage = language;
@@ -78,6 +76,20 @@ class _MyHomePageState extends State<MyHomePage> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: const Text('Intl Manager'),
         centerTitle: false,
+        actions: [
+          TextButton(
+            onPressed: () {
+              Api.instance.syncGitFile().then((res) {
+                if (res.code == successCode) {
+                  _loadData();
+                } else {
+                  debugPrint('Failed to sync git: ${res.msg}');
+                }
+              });
+            },
+            child: const Text('Sync Git'),
+          ),
+        ],
       ),
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -168,8 +180,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _updateTranslation(String key, String value) async {
-    Api api = Api();
-    CommonResponse res = await api.updateTranslation(_currentLanguage!, key, value);
+    CommonResponse res = await Api.instance.updateTranslation(_currentLanguage!, key, value);
     if (res.code == successCode) {
       _translations[key] = value;
       if (!mounted) return;
